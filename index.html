@@ -171,7 +171,7 @@ details summary{cursor:pointer;font-weight:600;padding:4px 0}
 'use strict';
 const $=id=>document.getElementById(id);
 const D=[[0,1],[1,0],[0,-1],[-1,0]], DA=['↑','→','↓','←'], DN=['Up','Right','Down','Left'];
-const KEY='disto-plan-v1',VER='build 11';
+const KEY='disto-plan-v1',VER='build 12';
 const newRoom=n=>({name:n,height:null,walls:[]});
 let S={job:'',rooms:[newRoom('Room 1')],cur:0,nextDir:1,
   set:{unit:'m',dp:3,th:0.15,du:'m',dims:true,label:true,autoWall:true,turn:1}};
@@ -457,6 +457,7 @@ function onReading(m,src){
   const now=Date.now();if(src==='DISTO'&&m===lastM&&now-lastT<400)return;lastT=now;
   const stored=armed||(S.set.autoWall&&!room().closed);
   lastM=m;$('last').innerHTML=fmt(m)+`<small>${unitLbl()} ${stored?'→ '+targetLabel():'· not stored'}</small>`;
+  if(src==='DISTO'){log(stored?'   → '+targetLabel():'   → NOT STORED (nothing waiting for a reading)');beep(!!stored)}
   if(armed){snap();setKey(armed,m);armed=nextArm(armed)}
   else if(S.set.autoWall&&!room().closed){snap();addWall(m)}
   if(navigator.vibrate)try{navigator.vibrate(40)}catch(e){}
@@ -542,8 +543,10 @@ let dev=null,cmd=null,wake=null,laser=false;
 function log(s){const t=new Date().toTimeString().slice(0,8);$('log').textContent+=t+'  '+s+'\n';$('log').scrollTop=1e9}
 const hex=dv=>[...new Uint8Array(dv.buffer,dv.byteOffset,dv.byteLength)].map(b=>b.toString(16).padStart(2,'0')).join(' ');
 function setConn(on,name){$('conn').classList.toggle('on',on);$('conn').textContent=on?(name||'Connected'):(dev?'Reconnect':'Connect');$('bMeasure').disabled=$('bLaser').disabled=!(on&&cmd)}
-let wantOff=false,busy=false,rt=null;
-function bind(d){dev=d;d.addEventListener('gattserverdisconnected',()=>{log('Disconnected');cmd=null;setConn(false);autoRe()})}
+let wantOff=false,busy=false,rt=null,lastX=-1,actx=null;
+function beep(ok){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=ok?1320:330;g.gain.value=.15;o.connect(g);g.connect(actx.destination);o.start();o.stop(actx.currentTime+(ok?.09:.3))}catch(e){}}
+document.addEventListener('click',()=>{try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume()}catch(e){}},{capture:true});
+function bind(d){dev=d;if(d._b)return;d._b=1;d.addEventListener('gattserverdisconnected',()=>{log('Disconnected');cmd=null;setConn(false);autoRe()})}
 function autoRe(){
   clearTimeout(rt);if(!dev||wantOff||dev.gatt.connected||document.visibilityState!=='visible')return;
   $('conn').textContent='Reconnecting…';
@@ -582,8 +585,9 @@ function onChar(uuid,dv){
   else if(uuid===C_X&&dv.byteLength>=8){
     // DISTO X3/X4: 20-byte packet = distance (float32, m), tilt (float32, rad), ..., counter, flags (0x40 = new measurement)
     const m=dv.getFloat32(0,true),tilt=dv.getFloat32(4,true)*180/Math.PI,isM=dv.byteLength<20||!!(dv.getUint8(19)&0x40);
-    log(`X ${isM?'shot':'status'}: ${m.toFixed(4)} m, tilt ${tilt.toFixed(1)}°  [${hex(dv)}]`);
-    if(isM&&isFinite(m)&&m>0.01&&m<400)onReading(m,'DISTO');
+    const fresh=isM||Math.abs(m-lastX)>1e-6;
+    log(`X ${isM?'shot':fresh?'sent from DISTO key':'repeat (ignored)'}: ${m.toFixed(4)} m${isM?', tilt '+tilt.toFixed(1)+'°':''}  [${hex(dv)}]`);
+    if(fresh&&isFinite(m)&&m>0.01&&m<400){lastX=m;onReading(m,'DISTO')}
   }
   else log(`char ${id}: ${hex(dv)}`);
 }
